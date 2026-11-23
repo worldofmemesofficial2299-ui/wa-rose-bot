@@ -1,5 +1,5 @@
 import { Telegraf, Markup } from 'telegraf';
-import { getConfig, setConfig } from './db.js';
+import { getConfig, setConfig, clearSession } from './db.js';
 import { requestQR, requestPairCode, getSock } from './whatsapp.js';
 import { defaultConfig } from './config.js';
 
@@ -14,7 +14,6 @@ export function startTelegram(botToken, ownerChatId) {
     return next();
   });
 
-  // --- MAIN MENU WITH BUTTONS ---
   const mainMenu = Markup.inlineKeyboard([
     [Markup.button.callback('📱 Pairing', 'menu_pairing'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
     [Markup.button.callback('🛡️ Toggles', 'menu_toggles'), Markup.button.callback('📊 Status', 'menu_status')]
@@ -76,9 +75,20 @@ Goodbye: ${config.toggles.goodbye ? '✅' : '❌'}
     bot.telegram.sendMessage(ctx.chat.id, '🌟 <b>Main Menu</b>\nSelect an option:', { parse_mode: 'HTML', ...mainMenu });
   });
 
-
   // --- TEXT COMMANDS ---
+  
+  // 🏓 Ping test
+  bot.command('ping', (ctx) => ctx.reply('🏓 Pong! The Telegram bot is awake and running.'));
+
+  // 🗑️ Reset command
+  bot.command('reset', async (ctx) => {
+    await clearSession();
+    await ctx.reply('🗑️ Database session wiped. Please wait 5 seconds, then send /pair or /qr.');
+    setTimeout(() => process.exit(1), 2000); // This forces Render to restart the bot
+  });
+
   bot.command('qr', (ctx) => requestQR(bot, ownerChatId));
+  
   bot.command('pair', (ctx) => {
     const phone = ctx.message.text.split(' ')[1];
     if (!phone) return ctx.reply('Usage: /pair 2348012345678');
@@ -127,6 +137,8 @@ Goodbye: ${config.toggles.goodbye ? '✅' : '❌'}
     ctx.reply(`<b>Bot Status</b>\n\nWhatsApp: ${connected}`, { parse_mode: 'HTML' });
   });
 
-  bot.launch();
+  // Remove 'await' and add error catch so Telegram doesn't hang
+  bot.launch().catch((err) => console.error('Telegram Launch Error:', err));
+  
   return bot;
-                        }
+  }
