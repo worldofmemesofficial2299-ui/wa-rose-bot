@@ -15,11 +15,11 @@ let qrRequestPending = false;
 let pairRequestInFlight = false;
 let qrRequestInFlight = false;
 let lastQRRequest = 0;
-let isReady = false; // 🔥 New Ready Flag
+let isReady = false; 
 const QR_COOLDOWN = 30_000;
 
 export async function initializeWhatsApp(telegramBot, ownerChatId, silent = false) {
-  isReady = false; // Reset flag on init
+  isReady = false; 
   const savedCreds = await loadSession();
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   if (savedCreds) state.creds = savedCreds;
@@ -29,9 +29,9 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
   sock = makeWASocket({
     version,
     auth: state,
-    logger: pino({ level: 'debug' }), // Debug is critical to see failures
+    logger: pino({ level: 'debug' }), 
     printQRInTerminal: false,
-    // 🔥 MANDATORY: WhatsApp validates this. Do not use "Guardian Bot" here.
+    // 🔥 MANDATORY for pair codes to work. Do not change this.
     browser: ['Chrome', 'Windows', '10.0.0'], 
   });
 
@@ -43,9 +43,7 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
   sock.ev.on('connection.update', async (update) => {
     const { qr, connection, lastDisconnect } = update;
 
-    if (qr) {
-      isReady = true; // The socket is now ready to accept pairing requests
-    }
+    if (qr) isReady = true; 
 
     if (qr && qrRequestPending) {
       qrRequestPending = false;
@@ -129,28 +127,64 @@ export async function requestQR(telegramBot, ownerChatId) {
 }
 
 export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
-  if (pairRequestInFlight) return telegramBot.sendMessage(ownerChatId, '⏳ Pair request already running.');
+  if (pairRequestInFlight) {
+    return telegramBot.sendMessage(ownerChatId, '⏳ Pair request already running.');
+  }
   pairRequestInFlight = true;
   
   try {
-    if (!sock) await initializeWhatsApp(telegramBot, ownerChatId, true);
-    await telegramBot.sendMessage(ownerChatId, '🔄 Waiting for WhatsApp to be ready...');
-    
-    // 🔥 THE FIX: Wait for `isReady` to become true
-    const start = Date.now();
-    while (!isReady && Date.now() - start < 20000) { // 20s timeout
-      await new Promise(r => setTimeout(r, 1000));
+    if (!sock) {
+      await initializeWhatsApp(telegramBot, ownerChatId, true);
     }
-    
-    if (!isReady) throw new Error('Connection timed out. Try /qr instead.');
+
+    await telegramBot.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket... waiting for ready state.');
+
+    await new Promise((resolve, reject) => {
+      let isResolved = false;
+
+      const checkState = () => {
+        if (isResolved) return;
+        if (sock.ws && sock.ws.isOpen && !sock.authState.creds.registered) {
+          isResolved = true;
+          return resolve();
+        }
+      };
+
+      const interval = setInterval(checkState, 1000);
+
+      const timeout = setTimeout(() => {
+        clearInterval(interval);
+        if (!isResolved) {
+          isResolved = true;
+          reject(new Error('WhatsApp took too long to respond. Render might be asleep. Try /reset then /pair again.'));
+        }
+      }, 25000);
+
+      sock.ev.once('connection.update', (update) => {
+        if (update.qr || update.connection === 'connecting') {
+          clearInterval(interval);
+          clearTimeout(timeout);
+          if (!isResolved) {
+            isResolved = true;
+            resolve();
+          }
+        }
+      });
+    });
+
+    await new Promise(r => setTimeout(r, 2000));
 
     const cleanNumber = phoneNumber.replace(/\D/g, '');
     const code = await sock.requestPairingCode(cleanNumber);
     
-    await telegramBot.sendMessage(ownerChatId, `🔑 *Your Pair Code*\n\n\`${code.slice(0, 4)}-${code.slice(4)}\`\n\n⏱ Valid ~60s.\n📱 WhatsApp → Linked Devices → Link with Phone Number.`, { parse_mode: 'Markdown' });
+    await telegramBot.sendMessage(
+      ownerChatId,
+      `🔑 *Your Pair Code*\n\n\`${code.slice(0, 4)}-${code.slice(4)}\`\n\n⏱ Valid ~60s.\n📱 WhatsApp → Linked Devices → Link with Phone Number.`,
+      { parse_mode: 'Markdown' }
+    );
   } catch (e) {
     await telegramBot.sendMessage(ownerChatId, `❌ Pair failed: ${e.message}`);
   } finally {
     pairRequestInFlight = false;
   }
-                                }
+        }
