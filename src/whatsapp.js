@@ -48,13 +48,11 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
       qrRequestPending = false;
       try {
         const buffer = await QRCode.toBuffer(qr, { scale: 8 });
-        // 🔥 FIXED: Added .telegram
         await telegramBot.telegram.sendPhoto(ownerChatId, buffer, {
           caption: '📸 *Scan this QR code*\n\n⏱ Valid ~60s.\n_If it expires, send /qr again._',
           parse_mode: 'Markdown',
         });
       } catch (e) {
-        // 🔥 FIXED: Added .telegram
         await telegramBot.telegram.sendMessage(ownerChatId, `❌ QR send failed: ${e.message}`);
       }
     }
@@ -62,7 +60,6 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
     if (connection === 'open') {
       isReady = true;
       qrRequestPending = false;
-      // 🔥 FIXED: Added .telegram
       await telegramBot.telegram.sendMessage(ownerChatId, '✅ *WhatsApp connected successfully.*', { parse_mode: 'Markdown' });
     }
 
@@ -71,7 +68,6 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
       
       if (code === DisconnectReason.loggedOut) {
-        // 🔥 FIXED: Added .telegram
         await telegramBot.telegram.sendMessage(ownerChatId, '⚠️ *Logged out.* Send /qr to generate a fresh login.');
       }
       
@@ -107,7 +103,6 @@ export function getSock() { return sock; }
 
 export async function requestQR(telegramBot, ownerChatId) {
   const now = Date.now();
-  // 🔥 FIXED: Added .telegram
   if (now - lastQRRequest < QR_COOLDOWN) return telegramBot.telegram.sendMessage(ownerChatId, '⏳ Please wait before requesting again.');
   
   if (qrRequestInFlight) return telegramBot.telegram.sendMessage(ownerChatId, '⏳ Generating QR…');
@@ -116,7 +111,6 @@ export async function requestQR(telegramBot, ownerChatId) {
   lastQRRequest = now;
   
   try {
-    // 🔥 FIXED: Added .telegram
     await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Generating fresh QR...');
     qrRequestPending = true;
     setTimeout(() => { qrRequestPending = false; }, 30_000);
@@ -133,7 +127,6 @@ export async function requestQR(telegramBot, ownerChatId) {
 
 export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
   if (pairRequestInFlight) {
-    // 🔥 FIXED: Added .telegram
     return telegramBot.telegram.sendMessage(ownerChatId, '⏳ Pair request already running.');
   }
   pairRequestInFlight = true;
@@ -143,9 +136,9 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
       await initializeWhatsApp(telegramBot, ownerChatId, true);
     }
 
-    // 🔥 FIXED: Added .telegram
     await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket... waiting for ready state.');
 
+    // 🔥 FIXED: Replaced sock.ev.once with sock.ev.on and manual cleanup
     await new Promise((resolve, reject) => {
       let isResolved = false;
 
@@ -167,16 +160,20 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
         }
       }, 25000);
 
-      sock.ev.once('connection.update', (update) => {
+      const listener = (update) => {
         if (update.qr || update.connection === 'connecting') {
           clearInterval(interval);
           clearTimeout(timeout);
           if (!isResolved) {
             isResolved = true;
+            // Remove the listener so it doesn't fire again
+            sock.ev.off('connection.update', listener);
             resolve();
           }
         }
-      });
+      };
+
+      sock.ev.on('connection.update', listener);
     });
 
     await new Promise(r => setTimeout(r, 2000));
@@ -184,16 +181,14 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
     const cleanNumber = phoneNumber.replace(/\D/g, '');
     const code = await sock.requestPairingCode(cleanNumber);
     
-    // 🔥 FIXED: Added .telegram
     await telegramBot.telegram.sendMessage(
       ownerChatId,
       `🔑 *Your Pair Code*\n\n\`${code.slice(0, 4)}-${code.slice(4)}\`\n\n⏱ Valid ~60s.\n📱 WhatsApp → Linked Devices → Link with Phone Number.`,
       { parse_mode: 'Markdown' }
     );
   } catch (e) {
-    // 🔥 FIXED: Added .telegram
     await telegramBot.telegram.sendMessage(ownerChatId, `❌ Pair failed: ${e.message}`);
   } finally {
     pairRequestInFlight = false;
   }
-        }
+  }
