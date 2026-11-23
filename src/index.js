@@ -20,7 +20,7 @@ async function main() {
   const telegramBot = startTelegram(process.env.TELEGRAM_BOT_TOKEN, ownerChatId);
 
   // Start WhatsApp silently — no QR flood on boot
-  await initializeWhatsApp(telegramBot, ownerChatId, true);
+  initializeWhatsApp(telegramBot, ownerChatId, true);
 }
 
 main().catch(console.error);
