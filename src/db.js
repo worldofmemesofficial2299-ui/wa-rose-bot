@@ -3,11 +3,9 @@ import { MongoClient } from 'mongodb';
 let client, db;
 
 export async function connectDB(uri) {
-  // Add the options object here
   client = new MongoClient(uri, {
-    autoSelectFamily: false,
+    autoSelectFamily: false, // Fixes the TLS/SSL Render error
   });
-  
   await client.connect();
   db = client.db('wa-rose-bot');
   console.log('✅ MongoDB connected');
@@ -25,6 +23,11 @@ export async function saveSession(authState) {
 export async function loadSession() {
   const doc = await db.collection('session').findOne({ _id: 'creds' });
   return doc ? JSON.parse(doc.data) : null;
+}
+
+export async function clearSession() {
+  await db.collection('session').deleteOne({ _id: 'creds' });
+  console.log('🗑️ Session cleared from database');
 }
 
 export async function getConfig() {
@@ -52,9 +55,4 @@ export async function incrementWarn(groupJid, userJid) {
 
 export async function resetWarn(groupJid, userJid) {
   await db.collection('warnings').deleteOne({ _id: `${groupJid}:${userJid}` });
-  }
-
-export async function clearSession() {
-  await db.collection('session').deleteOne({ _id: 'creds' });
-  console.log('Session cleared from database');
-    }
+}
