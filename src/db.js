@@ -53,3 +53,8 @@ export async function incrementWarn(groupJid, userJid) {
 export async function resetWarn(groupJid, userJid) {
   await db.collection('warnings').deleteOne({ _id: `${groupJid}:${userJid}` });
   }
+
+export async function clearSession() {
+  await db.collection('session').deleteOne({ _id: 'creds' });
+  console.log('Session cleared from database');
+    }
