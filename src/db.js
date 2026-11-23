@@ -3,7 +3,11 @@ import { MongoClient } from 'mongodb';
 let client, db;
 
 export async function connectDB(uri) {
-  client = new MongoClient(uri);
+  // Add the options object here
+  client = new MongoClient(uri, {
+    autoSelectFamily: false,
+  });
+  
   await client.connect();
   db = client.db('wa-rose-bot');
   console.log('✅ MongoDB connected');
