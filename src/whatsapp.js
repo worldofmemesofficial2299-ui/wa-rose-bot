@@ -138,7 +138,7 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
 
     await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket... waiting for ready state.');
 
-    // 🔥 FIXED: Replaced sock.ev.once with sock.ev.on and manual cleanup
+    // 🔥 FIXED: Using .on and .off (No .once)
     await new Promise((resolve, reject) => {
       let isResolved = false;
 
@@ -191,4 +191,4 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
   } finally {
     pairRequestInFlight = false;
   }
-  }
+}
