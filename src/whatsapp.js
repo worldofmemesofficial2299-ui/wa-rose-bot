@@ -73,23 +73,26 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
   });
 
   // Welcome / Goodbye
-  sock.ev.on('group-participants.update', async (update) => {
-    const config = (await getConfig()) || (await import('./config.js')).defaultConfig;
-    const { id: groupJid, participants, action } = update;
+sock.ev.on('group-participants.update', async (update) => {
+  const config = (await getConfig()) || (await import('./config.js')).defaultConfig;
+  const { id: groupJid, participants, action } = update;
 
-    for (const userJid of participants) {
-      const tag = `@${userJid.split('@')[0]}`;
-      if (action === 'add' && config.toggles.welcome) {
-        const text = config.welcomeMessage.replace('{tag}', tag);
-        await sock.sendMessage(groupJid, { text, mentions: [userJid] });
-      }
-      if (action === 'remove' && config.toggles.goodbye) {
-        const text = config.goodbyeMessage.replace('{tag}', tag);
-        await sock.sendMessage(groupJid, { text, mentions: [userJid] });
-      }
+  for (const userJid of participants) {
+    const tag = `@${userJid.split('@')[0]}`;
+    
+    // This sends your custom Welcome message from config.js
+    if (action === 'add' && config.toggles.welcome) {
+      const text = config.welcomeMessage.replace('{tag}', tag); 
+      await sock.sendMessage(groupJid, { text, mentions: [userJid] });
     }
-  });
-
+    
+    // This sends your custom Goodbye message from config.js
+    if (action === 'remove' && config.toggles.goodbye) {
+      const text = config.goodbyeMessage.replace('{tag}', tag);
+      await sock.sendMessage(groupJid, { text, mentions: [userJid] });
+    }
+  }
+});
   return sock;
 }
 
