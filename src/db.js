@@ -22,12 +22,25 @@ export async function saveSession(authState) {
 
 export async function loadSession() {
   const doc = await db.collection('session').findOne({ _id: 'creds' });
-  return doc ? JSON.parse(doc.data) : null;
+  if (!doc || !doc.data) return null;
+  try {
+    // Safety check: Ensure the saved data actually parses
+    return JSON.parse(doc.data);
+  } catch (e) {
+    console.error("Corrupt session found in DB, wiping it.");
+    await clearSession();
+    return null;
+  }
 }
 
 export async function clearSession() {
   await db.collection('session').deleteOne({ _id: 'creds' });
-  console.log('🗑️ Session cleared from database');
+  // Also wipe local auth files
+  const fs = await import('fs');
+  if (fs.existsSync('./auth_info')) {
+    fs.rmSync('./auth_info', { recursive: true, force: true });
+  }
+  console.log('🗑️ Session cleared from database and local disk');
 }
 
 export async function getConfig() {
