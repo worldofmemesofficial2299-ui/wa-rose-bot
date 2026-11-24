@@ -2,12 +2,13 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  Browsers,
+  Browsers
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import QRCode from 'qrcode';
-import fs from 'fs'; // Import fs to safely wipe local auth
+import fs from 'fs';
+import { HttpsProxyAgent } from 'https-proxy-agent'; // 🔥 Import Proxy Agent
 import { saveSession, loadSession, getConfig } from './db.js';
 import { handleMessage } from './moderation.js';
 import { defaultConfig } from './config.js';
@@ -22,7 +23,8 @@ const QR_COOLDOWN = 30_000;
 
 export async function initializeWhatsApp(telegramBot, ownerChatId, silent = false) {
   isReady = false;
-  // Safely delete auth_info before starting so no corrupt creds crash the connection
+  
+  // Wipe local auth to prevent corrupted session crashes
   if (fs.existsSync('./auth_info')) {
     fs.rmSync('./auth_info', { recursive: true, force: true });
   }
@@ -33,14 +35,18 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
 
   const { version } = await fetchLatestBaileysVersion();
   
+  // 🔥 PROXY SETUP (Using your first Webshare proxy)
+  const proxyUrl = 'http://skdujsug:psof3zpp12dq@45.38.107.97:6014';
+  const agent = new HttpsProxyAgent(proxyUrl);
+
   sock = makeWASocket({
     version,
     auth: state,
-    logger: pino({ level: 'silent' }), // Silent to prevent log spam
+    logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
-    // Uses the recommended trusted browser helper
     browser: Browsers.macOS('Chrome'),
     syncFullHistory: false,
+    agent: agent, // 🔥 Apply the proxy here
   });
 
   sock.ev.on('creds.update', async () => {
@@ -80,6 +86,7 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
         await telegramBot.telegram.sendMessage(ownerChatId, '⚠️ *Logged out.* Send /qr to generate a fresh login.');
       }
       
+      // Wait 5 seconds before reconnecting
       setTimeout(() => initializeWhatsApp(telegramBot, ownerChatId, true), 5000);
     }
   });
@@ -139,13 +146,12 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
   
   try {
     if (!sock) await initializeWhatsApp(telegramBot, ownerChatId, true);
-    await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket... waiting for server readiness.');
+    await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket via Proxy... waiting for server readiness.');
 
-    // Wait for the socket to open or generate a QR
     await new Promise((resolve, reject) => {
       let isResolved = false;
       const timeout = setTimeout(() => {
-          if (!isResolved) reject(new Error('Connection timed out. Try /qr instead.'));
+          if (!isResolved) reject(new Error('Connection timed out. The proxy might be dead. Try /qr instead.'));
       }, 30000);
       
       const check = () => {
