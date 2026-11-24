@@ -2,7 +2,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  Browsers // Import Browsers
+  proto,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
@@ -11,16 +11,27 @@ import { saveSession, loadSession, getConfig } from './db.js';
 import { handleMessage } from './moderation.js';
 import { defaultConfig } from './config.js';
 
+// 🔥 CRITICAL FIX: Monkey-patch to fix the Baileys 6.x Platform ID bug
+// This stops WhatsApp from rejecting the pair code with "Couldn't link device"
+import * as generics from '@whiskeysockets/baileys/lib/Utils/generics.js';
+generics.getPlatformId = (browser) => {
+  const platformType = proto.DeviceProps.PlatformType[browser.toUpperCase()];
+  return platformType ? platformType.toString() : '1';
+};
+
 let sock;
 let qrRequestPending = false;
 let pairRequestInFlight = false;
 let qrRequestInFlight = false;
 let lastQRRequest = 0;
-let isReady = false;
+let isReady = false; 
+let pairingReady = false; // Tracks if server is ready for pair code
 const QR_COOLDOWN = 30_000;
 
 export async function initializeWhatsApp(telegramBot, ownerChatId, silent = false) {
-  isReady = false;
+  isReady = false; 
+  pairingReady = false;
+  
   const savedCreds = await loadSession();
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   if (savedCreds) state.creds = savedCreds;
@@ -30,11 +41,11 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
   sock = makeWASocket({
     version,
     auth: state,
-    logger: pino({ level: 'debug' }),
+    logger: pino({ level: 'silent' }), // Silent to prevent log spam
     printQRInTerminal: false,
-    // 🔥 CRITICAL FIX: Use a canonical browser signature WhatsApp trusts
-    browser: Browsers.macOS('Chrome'), 
-    connectTimeoutMs: 60_000,
+    // 🔥 Use a trusted, canonical browser signature
+    browser: ['Mac OS', 'Chrome', '121.0.0'], 
+    syncFullHistory: false,
   });
 
   sock.ev.on('creds.update', async () => {
@@ -44,7 +55,18 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
 
   sock.ev.on('connection.update', async (update) => {
     const { qr, connection, lastDisconnect } = update;
-    if (qr) isReady = true;
+
+    if (qr) {
+      isReady = true; 
+      // Some versions of Baileys fire pairing ready when QR is generated
+      if (!pairingReady && sock.authState.creds.registered === false) {
+          pairingReady = true;
+      }
+    }
+
+    if (connection === 'connecting') {
+      pairingReady = true;
+    }
 
     if (qr && qrRequestPending) {
       qrRequestPending = false;
@@ -61,18 +83,29 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
 
     if (connection === 'open') {
       isReady = true;
+      pairingReady = true;
       qrRequestPending = false;
       await telegramBot.telegram.sendMessage(ownerChatId, '✅ *WhatsApp connected successfully.*', { parse_mode: 'Markdown' });
     }
 
     if (connection === 'close') {
       isReady = false;
+      pairingReady = false;
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      
       if (code === DisconnectReason.loggedOut) {
         await telegramBot.telegram.sendMessage(ownerChatId, '⚠️ *Logged out.* Send /qr to generate a fresh login.');
       }
+      
       setTimeout(() => initializeWhatsApp(telegramBot, ownerChatId, true), 5000);
     }
+  });
+
+  // Internal listener for pair-device readiness (strict mode)
+  sock.ev.on('connection.update', (update) => {
+      if (update.isNewLogin) {
+          pairingReady = true;
+      }
   });
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
@@ -130,28 +163,30 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
   
   try {
     if (!sock) await initializeWhatsApp(telegramBot, ownerChatId, true);
-    await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket... waiting for ready state.');
+    await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket... waiting for server readiness.');
 
-    // 🔥 CRITICAL FIX: Wait for the first QR event before requesting a code.
-    // This ensures the WebSocket is ready and avoids the 428 "Precondition Required" error.
+    // 🔥 STRICT READY GATE: Wait for the server to signal it's ready before requesting
     await new Promise((resolve, reject) => {
       let isResolved = false;
-      const timeout = setTimeout(() => reject(new Error('Connection timed out. Try /qr instead.')), 30000);
+      const timeout = setTimeout(() => {
+          if (!isResolved) reject(new Error('Connection timed out. Try /qr instead.'));
+      }, 30000);
       
-      const listener = (update) => {
-        if (update.qr || update.connection === 'connecting') {
-          clearTimeout(timeout);
-          if (!isResolved) {
-            isResolved = true;
-            sock.ev.off('connection.update', listener);
-            resolve();
+      const check = () => {
+          if (pairingReady || (sock.ws && sock.ws.isOpen && !sock.authState.creds.registered)) {
+              clearTimeout(timeout);
+              isResolved = true;
+              resolve();
           }
-        }
       };
-      sock.ev.on('connection.update', listener);
+      
+      const interval = setInterval(check, 1000);
+      
+      // Cleanup on timeout or resolve
+      setTimeout(() => clearInterval(interval), 30000);
     });
 
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 1500));
 
     const cleanNumber = phoneNumber.replace(/\D/g, '');
     const code = await sock.requestPairingCode(cleanNumber);
@@ -166,4 +201,4 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
   } finally {
     pairRequestInFlight = false;
   }
-      }
+                                                                                 }
