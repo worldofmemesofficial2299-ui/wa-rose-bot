@@ -2,6 +2,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  Browsers // Import Browsers
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
@@ -15,11 +16,11 @@ let qrRequestPending = false;
 let pairRequestInFlight = false;
 let qrRequestInFlight = false;
 let lastQRRequest = 0;
-let isReady = false; 
+let isReady = false;
 const QR_COOLDOWN = 30_000;
 
 export async function initializeWhatsApp(telegramBot, ownerChatId, silent = false) {
-  isReady = false; 
+  isReady = false;
   const savedCreds = await loadSession();
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   if (savedCreds) state.creds = savedCreds;
@@ -29,9 +30,11 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
   sock = makeWASocket({
     version,
     auth: state,
-    logger: pino({ level: 'debug' }), 
+    logger: pino({ level: 'debug' }),
     printQRInTerminal: false,
-    browser: ['Chrome', 'Windows', '10.0.0'], 
+    // 🔥 CRITICAL FIX: Use a canonical browser signature WhatsApp trusts
+    browser: Browsers.macOS('Chrome'), 
+    connectTimeoutMs: 60_000,
   });
 
   sock.ev.on('creds.update', async () => {
@@ -41,8 +44,7 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
 
   sock.ev.on('connection.update', async (update) => {
     const { qr, connection, lastDisconnect } = update;
-
-    if (qr) isReady = true; 
+    if (qr) isReady = true;
 
     if (qr && qrRequestPending) {
       qrRequestPending = false;
@@ -66,11 +68,9 @@ export async function initializeWhatsApp(telegramBot, ownerChatId, silent = fals
     if (connection === 'close') {
       isReady = false;
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      
       if (code === DisconnectReason.loggedOut) {
         await telegramBot.telegram.sendMessage(ownerChatId, '⚠️ *Logged out.* Send /qr to generate a fresh login.');
       }
-      
       setTimeout(() => initializeWhatsApp(telegramBot, ownerChatId, true), 5000);
     }
   });
@@ -104,7 +104,6 @@ export function getSock() { return sock; }
 export async function requestQR(telegramBot, ownerChatId) {
   const now = Date.now();
   if (now - lastQRRequest < QR_COOLDOWN) return telegramBot.telegram.sendMessage(ownerChatId, '⏳ Please wait before requesting again.');
-  
   if (qrRequestInFlight) return telegramBot.telegram.sendMessage(ownerChatId, '⏳ Generating QR…');
   
   qrRequestInFlight = true;
@@ -126,57 +125,33 @@ export async function requestQR(telegramBot, ownerChatId) {
 }
 
 export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
-  if (pairRequestInFlight) {
-    return telegramBot.telegram.sendMessage(ownerChatId, '⏳ Pair request already running.');
-  }
+  if (pairRequestInFlight) return telegramBot.telegram.sendMessage(ownerChatId, '⏳ Pair request already running.');
   pairRequestInFlight = true;
   
   try {
-    if (!sock) {
-      await initializeWhatsApp(telegramBot, ownerChatId, true);
-    }
-
+    if (!sock) await initializeWhatsApp(telegramBot, ownerChatId, true);
     await telegramBot.telegram.sendMessage(ownerChatId, '🔄 Booting WhatsApp socket... waiting for ready state.');
 
-    // 🔥 FIXED: Using .on and .off (No .once)
+    // 🔥 CRITICAL FIX: Wait for the first QR event before requesting a code.
+    // This ensures the WebSocket is ready and avoids the 428 "Precondition Required" error.
     await new Promise((resolve, reject) => {
       let isResolved = false;
-
-      const checkState = () => {
-        if (isResolved) return;
-        if (sock.ws && sock.ws.isOpen && !sock.authState.creds.registered) {
-          isResolved = true;
-          return resolve();
-        }
-      };
-
-      const interval = setInterval(checkState, 1000);
-
-      const timeout = setTimeout(() => {
-        clearInterval(interval);
-        if (!isResolved) {
-          isResolved = true;
-          reject(new Error('WhatsApp took too long to respond. Render might be asleep. Try /reset then /pair again.'));
-        }
-      }, 25000);
-
+      const timeout = setTimeout(() => reject(new Error('Connection timed out. Try /qr instead.')), 30000);
+      
       const listener = (update) => {
         if (update.qr || update.connection === 'connecting') {
-          clearInterval(interval);
           clearTimeout(timeout);
           if (!isResolved) {
             isResolved = true;
-            // Remove the listener so it doesn't fire again
             sock.ev.off('connection.update', listener);
             resolve();
           }
         }
       };
-
       sock.ev.on('connection.update', listener);
     });
 
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 1000));
 
     const cleanNumber = phoneNumber.replace(/\D/g, '');
     const code = await sock.requestPairingCode(cleanNumber);
@@ -191,4 +166,4 @@ export async function requestPairCode(telegramBot, ownerChatId, phoneNumber) {
   } finally {
     pairRequestInFlight = false;
   }
-}
+      }
